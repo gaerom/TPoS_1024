@@ -49,10 +49,11 @@ if __name__ == "__main__":
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     ngpu=len(device)
-    clip_model, _ = clip.load("ViT-L/14", device=device)
+    # clip_model, _ = clip.load("ViT-L/14", device=device)
+    clip_model, _ = clip.load("RN50x64", device=device) # 사용해야 할 것
 
-    model = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14")
-    tokenizer = AutoTokenizer.from_pretrained("openai/clip-vit-large-patch14")
+    # model = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14")
+    # tokenizer = AutoTokenizer.from_pretrained("openai/clip-vit-large-patch14")
     
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
@@ -90,27 +91,36 @@ if __name__ == "__main__":
         result_loss = 0
 
         for idx, (batch_audio, batch_audio_aug, batch_text) in enumerate(train_dataloader):
-            audio_embedding1, audio_embedding2, beta_t = audioencoder(batch_audio.cuda())
+            audio_embedding1, audio_embedding2, beta_t = audioencoder(batch_audio.cuda()) # Audio Encoder return 값이 3개로 unpacking
+            # print(f'audio embedding1 shape: {audio_embedding1.shape}') # [b, 768] -> [b, 1024]
+            print(f'audio embedding2 shape: {audio_embedding2.shape}') # [b, 5, 768]
+            
             audio_embedding_aug1, audio_embedding_aug2, beta_aug_t  = audioencoder(batch_audio_aug.cuda())
 
             text_tokens1 = torch.cat([clip.tokenize(text) for text in batch_text])
+            # print(text_tokens1.shape) # [b, 77]
 
             with torch.no_grad():
                 clip_768_data = torch.cat([clip_768(text) for text in batch_text])
+                # print(clip_768_data.shape) # [b, 77, 768]
                 text_embedding1 = clip_model.encode_text(text_tokens1.to(device)).float()
+                print(f'text_embedding1: {text_embedding1.shape}') # [b, 768] -> [b, 1024]
                 text_embedding1 = text_embedding1 / text_embedding1.norm(dim=-1, keepdim=True)
 
             optimizer.zero_grad()
             map_optimizer.zero_grad()
 
             audio_embedding2_sum = torch.sum(audio_embedding2,dim=1)
+            # print(f'audio embedding2 sum: {audio_embedding2_sum.shape}') # [b, 768]
             audio_embedding_aug2_sum = torch.sum(audio_embedding_aug2,dim=1)
             map_result = map_model(audio_embedding2_sum.clone().unsqueeze(1))
+            print(f'after mapping: {map_result.shape}') # [b, 76, 768]
+            
 
             loss = 0
             loss_list = []
 
-            projection_audio_text1 = (audio_embedding1 @ text_embedding1.T) * math.exp(0.07)
+            projection_audio_text1 = (audio_embedding1 @ text_embedding1.T) * math.exp(0.07) # transpose 하는 이유는 matrix 계산을 위해
             projection_audio_text2 = (audio_embedding2_sum @ text_embedding1.T) * math.exp(0.07)
             projection_self_audio1 = (audio_embedding_aug1 @ audio_embedding_aug1.T) * math.exp(0.07)
             projection_self_audio2 = (audio_embedding_aug2_sum @ audio_embedding_aug2_sum.T) * math.exp(0.07)
