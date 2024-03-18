@@ -95,6 +95,7 @@ class Audio_Encoder(nn.Module):
         self.conv = torch.nn.Conv2d(1, 3, (3, 3))
         self.conv2 = torch.nn.Conv2d(1,77,(1,1)) 
         self.feature_extractor = timm.create_model(self.backbone_name, num_classes=self.input_size, pretrained=True)
+        self.adjustment_layer = nn.Linear(hidden_size, 1024)
     
         self.lstm = nn.LSTM(input_size=self.input_size, hidden_size=self.hidden_size,num_layers=num_layers, batch_first=True)
         self.ngpus=ngpus
@@ -108,12 +109,23 @@ class Audio_Encoder(nn.Module):
         a=torch.zeros(self.size,self.sequence_length,768).cuda()
         for i in range(self.sequence_length):
             a[:,i,:] = self.feature_extractor(self.conv(x[:,i,:,:].reshape(self.size,1,128,self.hidden_size//self.sequence_length)))
+            # print(f'a shape: {a[:,i,:].shape}') # [b, 768]
+            
+        
         x=a
         h_0 = Variable(torch.zeros( self.num_layers,x.size(0), self.hidden_size)).cuda()
         c_0 = Variable(torch.zeros( self.num_layers,x.size(0),  self.hidden_size)).cuda()
         self.lstm.flatten_parameters()
         output, (hn, cn) = self.lstm(x, (h_0, c_0))
         output = output/output.norm(dim=-1,keepdim=True)
+        # print(f'output shape: {output.shape}') # [b, 5, 768]
+        
+        
+        adjusted_output = self.adjustment_layer(output[:, -1, :])
+        print(f'LSTM output dim 조정: {adjusted_output.shape}') # 얘는 2d 
+        
+        # adjusted_output_3d = adjusted_output.view(-1, x.size(1), 1024)
+        # print(f'3d output: {adjusted_output_3d.shape}')
         
         output_permute = output.permute(0,2,1)
 
@@ -130,5 +142,4 @@ class Audio_Encoder(nn.Module):
             next_z=output[:,i,:].mul(beta_t[:,i].reshape(self.size,-1) )
             out=torch.cat([out,next_z.unsqueeze(1)],dim=1)
 
-        return output[:,-1,:], out, beta_t
-
+        return adjusted_output, out, beta_t
