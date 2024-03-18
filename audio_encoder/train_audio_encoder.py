@@ -226,5 +226,3 @@ if __name__ == "__main__":
             save_path2 = "../pretrained_models/map_model_" + str(epoch) + ".pth"
             torch.save(map_model.state_dict(), save_path2)
             min_validation_loss_value = validation_loss_value
-        
-    
