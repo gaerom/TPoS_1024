@@ -11,7 +11,8 @@ nltk.download("wordnet")
 
 class VggsoundCurationDataset(Dataset):
     def __init__(self):
-        self.audio_lists = glob("../vggsound_curation/*.npy")
+        # self.audio_lists = glob("../vggsound_curation/*.npy")
+        self.audio_lists = glob("../npy_vggsound_train/*.npy")
         self.time_length = 864
         self.n_mels = 128
         self.num_frames = 5
@@ -45,7 +46,7 @@ class VggsoundCurationDataset(Dataset):
         audio_per_frame_aug = []
         inter_frame = w // self.num_frames
 
-        for idx_audio in range(self.num_frames):
+        for idx_audio in range(self.num_frames): # audio segment 5개씩 처리 (같은 하나의 파일에서 나온 5개의 segments)
             audio_seg = audio_inputs[:,:,idx_audio*inter_frame:idx_audio*inter_frame+inter_frame]
             _,_,seg_w = audio_seg.shape
             if seg_w >= self.frame_per_audio:
@@ -58,11 +59,10 @@ class VggsoundCurationDataset(Dataset):
                 audio_seg = zero
 
             audio_seg = audio_seg[0,:self.n_mels,:inter_frame]
-
             audio_aug = self.spec_augment(audio_seg)
 
-            audio_per_frame.append(audio_seg)
 
+            audio_per_frame.append(audio_seg) # segment가 저장되는 곳
             audio_per_frame_aug.append(audio_aug)
 
         audio_per_frame=np.array(audio_per_frame)
@@ -122,7 +122,7 @@ class VggsoundCurationTestDataset(Dataset):
         elif w < self.time_length:
             zero = np.zeros((1, self.n_mels, self.time_length))
             j = random.randint(0, self.time_length - w - 1)
-            zero[:,:,j:j+w] = audio_inputs[:,:,:w]
+            zero[:,:,j:j+w] = audio_inputs[:,:,:w] # padding
             audio_inputs = zero
 
         audio_resize = audio_inputs[0,:self.n_mels,:self.width_resolution]
@@ -130,11 +130,11 @@ class VggsoundCurationTestDataset(Dataset):
         w = audio_resize.shape[1]
         audio_inputs = audio_resize.reshape(-1,self.n_mels,self.width_resolution)
         
-        audio_per_frame = []
+        audio_per_frame = [] # segment가 저장되는 곳
         audio_per_frame_aug = []
         inter_frame = w // self.num_frames
 
-        for idx_audio in range(self.num_frames):
+        for idx_audio in range(self.num_frames): # audio segment 5개씩 처리 (같은 하나의 파일에서 나온 5개의 segments)
             audio_seg = audio_inputs[:,:,idx_audio*inter_frame:idx_audio*inter_frame+inter_frame]
             _,_,seg_w = audio_seg.shape
             if seg_w >= self.frame_per_audio:
@@ -147,12 +147,9 @@ class VggsoundCurationTestDataset(Dataset):
                 audio_seg = zero
 
             audio_seg = audio_seg[0,:self.n_mels,:inter_frame]
-
             audio_aug = self.spec_augment(audio_seg)
 
             audio_per_frame.append(audio_seg)
-
-
             audio_per_frame_aug.append(audio_aug)
 
         audio_per_frame=np.array(audio_per_frame)
@@ -161,8 +158,8 @@ class VggsoundCurationTestDataset(Dataset):
         audio_per_frame = torch.from_numpy(audio_per_frame).float()
         audio_per_frame_aug = torch.from_numpy(audio_per_frame_aug).float()
 
-            
         return audio_per_frame, audio_per_frame_aug, text_prompt
+
 
     def spec_augment(self, spec, num_mask=2, freq_masking_max_percentage=0.15, time_masking_max_percentage=0.3):
         spec = spec.copy()
@@ -185,3 +182,19 @@ class VggsoundCurationTestDataset(Dataset):
 
     def __len__(self):
         return len(self.audio_lists)
+
+
+
+
+# dataset = VggsoundCurationDataset()
+# dataset_length = len(dataset)
+
+# # 모든 dataset에 대해
+# for i in range(dataset_length):
+#     audio_per_frame, audio_per_frame_aug, text_prompt = dataset[i]
+
+#     print(f"Index: {i}")
+#     print(f'Original audio segments shape and length: {audio_per_frame.shape}, segment 개수: {len(audio_per_frame)}')
+#     print(f'Augmented audio segments shape and length: {audio_per_frame_aug.shape}, segment 개수: {len(audio_per_frame_aug)}')
+#     print("Text prompt:", text_prompt)
+#     print("-----------------------------------------------------------------------------------------")
