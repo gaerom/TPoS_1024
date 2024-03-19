@@ -1,10 +1,10 @@
 # TPoS_1024
 ✅ code for audio preprocessing  
 
-
+<br>
 ## Run
 ### Train audio encoder  
-Locate downloaded weights in TPoS_1024/`pretrained_models`.  <br>
+Locate downloaded weights in TPoS_1024/`pretrained_models`.  
 🗂️ [Pre-trained weight](https://drive.google.com/drive/folders/11kDpSAp6wKyDU13rVT66dB0H2vJwXk5D)  
 
 
