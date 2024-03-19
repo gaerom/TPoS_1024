@@ -1,15 +1,20 @@
-import torch
 import clip
 import random
 import argparse
-import torch.optim as optim
+
 from datasets_final import VggsoundCurationTestDataset,VggsoundCurationDataset
 from model_final import Mapping_Model, Audio_Encoder, FrozenCLIPEmbedder, FrozenCLIPTextEmbedder, copyStateDict
+
+import torch
+import torch.optim as optim
 import torch.nn.functional as F
 import torch.nn as nn
+
 import math
 import time
 import os
+import wandb
+from tqdm import tqdm
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 from transformers import AutoTokenizer, CLIPTextModel
 
@@ -55,6 +60,16 @@ if __name__ == "__main__":
     # model = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14")
     # tokenizer = AutoTokenizer.from_pretrained("openai/clip-vit-large-patch14")
     
+    # wandb 연동
+    wandb.init(project="audio preprocessing")
+    cfg = {
+        "learning_rate": args.lr,
+        "epochs" : args.epochs,
+        "batch_size" : args.batch_size,
+        "dropout": 0.2
+    }
+    wandb.config.update(cfg)
+    
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=args.batch_size,
@@ -84,7 +99,7 @@ if __name__ == "__main__":
     ce = torch.nn.CrossEntropyLoss()
     min_validation_loss_value = 50000
 
-    for epoch in range(args.epochs):
+    for epoch in tqdm(range(args.epochs), desc='Processing: '):
         start = time.time()
         train_loss_value, validation_loss_value = 0, 0
         audioencoder.train()
@@ -237,3 +252,6 @@ if __name__ == "__main__":
             save_path2 = "../pretrained_models/map_model_" + str(epoch) + ".pth"
             torch.save(map_model.state_dict(), save_path2)
             min_validation_loss_value = validation_loss_value
+            
+        wandb.log({'train_loss':train_loss_value / len(train_dataloader), 'val_loss':validation_loss_value / len(validation_dataloader), 'time': time.time() - start})
+wandb.finish()
