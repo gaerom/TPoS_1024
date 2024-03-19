@@ -247,9 +247,9 @@ if __name__ == "__main__":
                     f.write("\n\nEpoch : {:2d} , train loss : {:.5f}, validation loss : {:.5f}, Time : {}".format(epoch, train_loss_value / len(train_dataloader), validation_loss_value / len(validation_dataloader), time.time() - start))
         
         if min_validation_loss_value > validation_loss_value:
-            save_path = "../pretrained_models/audio_encoder_" + str(epoch) + ".pth"
+            save_path = "../weights/audio_encoder_" + str(epoch) + ".pth"
             torch.save(audioencoder.state_dict(), save_path)
-            save_path2 = "../pretrained_models/map_model_" + str(epoch) + ".pth"
+            save_path2 = "../weights/map_model_" + str(epoch) + ".pth"
             torch.save(map_model.state_dict(), save_path2)
             min_validation_loss_value = validation_loss_value
             
