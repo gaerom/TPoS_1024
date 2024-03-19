@@ -4,7 +4,7 @@ import random
 import argparse
 import torch.optim as optim
 from datasets_final import VggsoundCurationTestDataset,VggsoundCurationDataset
-from model_final import Mapping_Model, Audio_Encoder, FrozenCLIPEmbedder, copyStateDict
+from model_final import Mapping_Model, Audio_Encoder, FrozenCLIPEmbedder, FrozenCLIPTextEmbedder, copyStateDict
 import torch.nn.functional as F
 import torch.nn as nn
 import math
@@ -76,7 +76,8 @@ if __name__ == "__main__":
     map_model = Mapping_Model()
     map_model = nn.DataParallel(map_model).to(device)
     mse_loss = torch.nn.MSELoss()
-    clip_768 = FrozenCLIPEmbedder()
+    # clip_768 = FrozenCLIPEmbedder()
+    clip_1024 = FrozenCLIPTextEmbedder()
     optimizer = optim.SGD(audioencoder.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
     map_optimizer = optim.Adam(map_model.parameters(), lr=args.lr)
     scheduler = optim.lr_scheduler.CyclicLR(optimizer, base_lr=0.001, max_lr=0.1, step_size_up=5, mode="triangular")
@@ -93,7 +94,7 @@ if __name__ == "__main__":
         for idx, (batch_audio, batch_audio_aug, batch_text) in enumerate(train_dataloader):
             audio_embedding1, audio_embedding2, beta_t = audioencoder(batch_audio.cuda()) # Audio Encoder return 값이 3개로 unpacking
             # print(f'audio embedding1 shape: {audio_embedding1.shape}') # [b, 768] -> [b, 1024]
-            print(f'audio embedding2 shape: {audio_embedding2.shape}') # [b, 5, 768]
+            # print(f'audio embedding2 shape: {audio_embedding2.shape}') # [b, 5, 768] -> [b, 5, 1024]
             
             audio_embedding_aug1, audio_embedding_aug2, beta_aug_t  = audioencoder(batch_audio_aug.cuda())
 
@@ -101,20 +102,20 @@ if __name__ == "__main__":
             # print(text_tokens1.shape) # [b, 77]
 
             with torch.no_grad():
-                clip_768_data = torch.cat([clip_768(text) for text in batch_text])
-                # print(clip_768_data.shape) # [b, 77, 768]
+                clip_1024_data = torch.cat([clip_1024(text) for text in batch_text])
+                # print(f'clip_1024_data shape: {clip_1024_data.shape}') # [b, 77, 1024]
                 text_embedding1 = clip_model.encode_text(text_tokens1.to(device)).float()
-                print(f'text_embedding1: {text_embedding1.shape}') # [b, 768] -> [b, 1024]
+                # print(f'text_embedding1: {text_embedding1.shape}') # [b, 1024]
                 text_embedding1 = text_embedding1 / text_embedding1.norm(dim=-1, keepdim=True)
 
             optimizer.zero_grad()
             map_optimizer.zero_grad()
 
             audio_embedding2_sum = torch.sum(audio_embedding2,dim=1)
-            # print(f'audio embedding2 sum: {audio_embedding2_sum.shape}') # [b, 768]
             audio_embedding_aug2_sum = torch.sum(audio_embedding_aug2,dim=1)
+            # print(f'audio_embedding2_sum  shape: {audio_embedding2_sum.shape}') # [b, 768] -> [b, 1024]
             map_result = map_model(audio_embedding2_sum.clone().unsqueeze(1))
-            print(f'after mapping: {map_result.shape}') # [b, 76, 768]
+            # print(f'after mapping: {map_result.shape}') # [b, 76, 768] -> [b, 77, 1024]
             
 
             loss = 0
@@ -133,8 +134,12 @@ if __name__ == "__main__":
             self_contrastive_loss2 = ce(projection_self_audio2, label) + ce(projection_self_audio2.T, label)
             loss += (audio_contrastive_loss1 + audio_contrastive_loss2) / 4
             loss += (self_contrastive_loss1 + self_contrastive_loss1) / 6
+            
+            # add
+            map_result = map_result.float()
+            clip_1024_data = clip_1024_data.float()
 
-            result_loss = mse_loss(map_result, clip_768_data[:,1:])
+            result_loss = mse_loss(map_result, clip_1024_data)
             loss += result_loss
 
             loss_list.append(audio_contrastive_loss1.item()/4)
@@ -171,11 +176,11 @@ if __name__ == "__main__":
             with torch.no_grad():
                 
                 audio_embedding1, audio_embedding2, beta_t = audioencoder(batch_audio.cuda())
-                audio_embedding_aug1, audio_embedding_aug2, beta_aug_t  = audioencoder(batch_audio_aug.cuda()) # 여기서 에러
+                audio_embedding_aug1, audio_embedding_aug2, beta_aug_t  = audioencoder(batch_audio_aug.cuda())
 
                 text_tokens1 = torch.cat([clip.tokenize(text) for text in batch_text])
 
-                clip_768_data = torch.cat([clip_768(text) for text in batch_text])
+                clip_1024_data = torch.cat([clip_1024(text) for text in batch_text])
                 text_embedding1 = clip_model.encode_text(text_tokens1.to(device)).float()
                 text_embedding1 = text_embedding1 / text_embedding1.norm(dim=-1, keepdim=True)
 
@@ -188,6 +193,8 @@ if __name__ == "__main__":
                 torch.autograd.set_detect_anomaly(True)
                 loss = 0
                 loss_list = []
+                
+                
 
                 projection_audio_text1 = (audio_embedding1 @ text_embedding1.T) * math.exp(0.07)
                 projection_audio_text2 = (audio_embedding2_sum @ text_embedding1.T) * math.exp(0.07)
@@ -203,7 +210,7 @@ if __name__ == "__main__":
                 loss += (audio_contrastive_loss1 + audio_contrastive_loss2) / 4
                 loss += (self_contrastive_loss1 + self_contrastive_loss1) / 6
 
-                result_loss = mse_loss(map_result, clip_768_data[:,1:])
+                result_loss = mse_loss(map_result, clip_1024_data)
                 loss += result_loss
 
                 loss_list.append(audio_contrastive_loss1.item()/4)
