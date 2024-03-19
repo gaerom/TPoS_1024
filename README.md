@@ -33,7 +33,7 @@ Locate downloaded weights in TPoS_1024/`pretrained_models`.
 └── inference.sh 
 
 ```
-<br>
+
 ### Run
 ```
 cd audio_encoder
