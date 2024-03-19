@@ -29,7 +29,7 @@ Locate downloaded weights in TPoS_1024/`pretrained_models`.
 ├── pretrained_models
 │   ├── audio_encoder_23.pth
 │   ├── map_model_23.pth
-├── vggsound_curation 
+│
 └── inference.sh 
 
 ```
