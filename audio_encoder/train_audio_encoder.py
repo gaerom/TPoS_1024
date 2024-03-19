@@ -209,7 +209,11 @@ if __name__ == "__main__":
                 self_contrastive_loss2 = ce(projection_self_audio2, label) + ce(projection_self_audio2.T, label)
                 loss += (audio_contrastive_loss1 + audio_contrastive_loss2) / 4
                 loss += (self_contrastive_loss1 + self_contrastive_loss1) / 6
-
+                
+                # add
+                map_result = map_result.float()
+                clip_1024_data = clip_1024_data.float()
+            
                 result_loss = mse_loss(map_result, clip_1024_data)
                 loss += result_loss
 
