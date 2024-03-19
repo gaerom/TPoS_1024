@@ -3,6 +3,8 @@ import timm
 from collections import OrderedDict
 import torch.nn as nn
 from torch.autograd import Variable
+import clip
+from typing import Union, List
 
 def copyStateDict(state_dict):
     if list(state_dict.keys())[0].startswith("module"):
@@ -30,6 +32,7 @@ def disabled_train(self, mode=True):
     does not change anymore."""
     return self
 
+# 기존에 사용하던 text encoder 
 class FrozenCLIPEmbedder(AbstractEncoder):
     """Uses the CLIP transformer encoder for text (from Hugging Face)"""
     def __init__(self, version="openai/clip-vit-large-patch14", device="cuda", max_length=77):
@@ -56,18 +59,86 @@ class FrozenCLIPEmbedder(AbstractEncoder):
         else: return tokens.argmax(dim=-1).item()
     def encode(self, text, option=None):
         return self(text, option)
+    
+    
+# class FrozenCLIPTextEmbedder(torch.nn.Module):
+#     """
+#     Uses the CLIP transformer encoder for text.
+#     available models = ['RN50', 'RN101', 'RN50x4', 'RN50x16', 'RN50x64', 'ViT-B/32', 'ViT-B/16', 'ViT-L/14', 'ViT-L/14@336px']
+#     """
+#     def __init__(self, version='RN50x64', device="cuda", max_length=77, n_repeat=1, normalize=True):
+#         super().__init__()
+#         self.model, _ = clip.load(version, device=device)
+#         self.max_length = max_length
+#         self.n_repeat = n_repeat
+#         self.normalize = normalize
+
+#     def forward(self, text: Union[str, List[str]]):
+#         device = next(self.model.parameters()).device
+#         tokens = clip.tokenize(text, context_length=self.max_length).to(device)
+#         z = self.model.encode_text(tokens)
+#         if self.normalize:
+#             z = z / z.norm(dim=-1, keepdim=True)
+#         return z
+
+#     def encode(self, text: Union[str, List[str]]):
+#         z = self(text)
+#         if z.ndim == 2:
+#             z = z[:, None, :]
+#         z = z.repeat(1, self.max_length, 1) # 두 번째 인자가 n.repeat 이었던 것을 max_length로 수정
+#         return z
+
+
+# FrozenCLIPTextEmbedder 수정
+class FrozenCLIPTextEmbedder(torch.nn.Module):
+    def __init__(self, version='RN50x64', device="cuda", max_length=77, normalize=True):
+        super().__init__()
+        self.model, _ = clip.load(version, device=device)
+        self.max_length = max_length
+        self.normalize = normalize
+
+    def forward(self, text: Union[str, List[str]]):
+        device = next(self.model.parameters()).device
+        tokens = clip.tokenize(text, context_length=self.max_length).to(device)
+        z = self.model.encode_text(tokens)
+        if self.normalize:
+            z = z / z.norm(dim=-1, keepdim=True)
+        # 임베딩 차원이 2D일 경우, max_length를 기준으로 차원 확장
+        if z.ndim == 2:
+            z = z.unsqueeze(1).repeat(1, self.max_length, 1)
+        return z
+
+    
+# # 원본
+# class Mapping_Model(nn.Module):
+#     def __init__(self, max_length=77):
+#         super().__init__()
+#         self.max_length = max_length # default: max_length-1
+#         self.linear1 = torch.nn.Linear(1024, self.max_length//7*1024)
+#         self.linear2 = torch.nn.Linear(self.max_length//7*1024,self.max_length*1024)
+#         self.act = torch.nn.GELU()
+#         self.drop = torch.nn.Dropout(0.2)
+        
+#     def forward(self, x):
+#         return self.act(self.drop(self.linear2(self.act(self.drop(self.linear1(x)))))).reshape(x.shape[0],self.max_length,1024) # default: 768
 
 class Mapping_Model(nn.Module):
-    def __init__(self, max_length=77):
+    def __init__(self, sequence_length=77, input_dim=1024, output_dim=1024):
         super().__init__()
-        self.max_length = max_length-1
-        self.linear1 = torch.nn.Linear(768,self.max_length//7*768)
-        self.linear2 = torch.nn.Linear(self.max_length//7*768,self.max_length*768)
-        self.act = torch.nn.GELU()
-        self.drop = torch.nn.Dropout(0.2)
+        self.sequence_length = sequence_length
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+
+        self.linear1 = nn.Linear(input_dim, input_dim * 2)
+        self.linear2 = nn.Linear(input_dim * 2, sequence_length * output_dim)
+        self.act = nn.GELU()
+        self.drop = nn.Dropout(0.2)
         
     def forward(self, x):
-        return self.act(self.drop(self.linear2(self.act(self.drop(self.linear1(x)))))).reshape(x.shape[0],self.max_length,768)
+        x = self.drop(self.act(self.linear1(x))) 
+        x = self.drop(self.act(self.linear2(x)))
+        x = x.view(-1, self.sequence_length, self.output_dim)  
+        return x
 
 
 
@@ -122,10 +193,8 @@ class Audio_Encoder(nn.Module):
         
         
         adjusted_output = self.adjustment_layer(output[:, -1, :])
-        print(f'LSTM output dim 조정: {adjusted_output.shape}') # 얘는 2d 
-        
-        # adjusted_output_3d = adjusted_output.view(-1, x.size(1), 1024)
-        # print(f'3d output: {adjusted_output_3d.shape}')
+        # print(f'LSTM output dim 조정: {adjusted_output.shape}') # 얘는 2d 
+    
         
         output_permute = output.permute(0,2,1)
 
@@ -133,7 +202,8 @@ class Audio_Encoder(nn.Module):
 
         beta_t=self.softmax(beta_t)
 
-        out=output[:,0,:].mul(beta_t[:,0].reshape(self.size,-1))
+        out=output[:,-1,:].mul(beta_t[:,0].reshape(self.size,-1)) # 얘는 3d로 전달? -> audio_embedding2_sum
+        # print(f'out shape: {out.shape}') # [b, 768] 
 
         out=out.unsqueeze(1)
 
@@ -142,4 +212,6 @@ class Audio_Encoder(nn.Module):
             next_z=output[:,i,:].mul(beta_t[:,i].reshape(self.size,-1) )
             out=torch.cat([out,next_z.unsqueeze(1)],dim=1)
 
+        out = self.adjustment_layer(out) # 추가
+        
         return adjusted_output, out, beta_t
