@@ -5,6 +5,8 @@ import torch.nn as nn
 from torch.autograd import Variable
 import clip
 from typing import Union, List
+import open_clip
+
 
 def copyStateDict(state_dict):
     if list(state_dict.keys())[0].startswith("module"):
@@ -59,18 +61,14 @@ class FrozenCLIPEmbedder(AbstractEncoder):
         else: return tokens.argmax(dim=-1).item()
     def encode(self, text, option=None):
         return self(text, option)
-    
-    
+
+
+# FrozenCLIPTextEmbedder
 # class FrozenCLIPTextEmbedder(torch.nn.Module):
-#     """
-#     Uses the CLIP transformer encoder for text.
-#     available models = ['RN50', 'RN101', 'RN50x4', 'RN50x16', 'RN50x64', 'ViT-B/32', 'ViT-B/16', 'ViT-L/14', 'ViT-L/14@336px']
-#     """
-#     def __init__(self, version='RN50x64', device="cuda", max_length=77, n_repeat=1, normalize=True):
+#     def __init__(self, version='RN50x64', device="cuda", max_length=77, normalize=True):
 #         super().__init__()
 #         self.model, _ = clip.load(version, device=device)
 #         self.max_length = max_length
-#         self.n_repeat = n_repeat
 #         self.normalize = normalize
 
 #     def forward(self, text: Union[str, List[str]]):
@@ -79,48 +77,76 @@ class FrozenCLIPEmbedder(AbstractEncoder):
 #         z = self.model.encode_text(tokens)
 #         if self.normalize:
 #             z = z / z.norm(dim=-1, keepdim=True)
-#         return z
-
-#     def encode(self, text: Union[str, List[str]]):
-#         z = self(text)
+#         # 임베딩 차원이 2D일 경우, max_length를 기준으로 차원 확장
 #         if z.ndim == 2:
-#             z = z[:, None, :]
-#         z = z.repeat(1, self.max_length, 1) # 두 번째 인자가 n.repeat 이었던 것을 max_length로 수정
+#             z = z.unsqueeze(1).repeat(1, self.max_length, 1)
 #         return z
 
+# ViT-14 기반의 text encoder로 교체 
+class FrozenOpenCLIPEmbedder(AbstractEncoder):
+    """
+    Uses the OpenCLIP transformer encoder for text
+    """
+    LAYERS = [
+        # "pooled",
+        "last",
+        "penultimate"
+    ]
 
-# FrozenCLIPTextEmbedder 수정
-class FrozenCLIPTextEmbedder(torch.nn.Module):
-    def __init__(self, version='RN50x64', device="cuda", max_length=77, normalize=True):
+    def __init__(self, arch="ViT-H-14", version="laion2b_s32b_b79k", device="cuda", max_length=77,
+                 freeze=True, layer="last"):
         super().__init__()
-        self.model, _ = clip.load(version, device=device)
-        self.max_length = max_length
-        self.normalize = normalize
+        assert layer in self.LAYERS
+        model, _, _ = open_clip.create_model_and_transforms(arch, device=torch.device('cpu'))
+        del model.visual
+        self.model = model
 
-    def forward(self, text: Union[str, List[str]]):
-        device = next(self.model.parameters()).device
-        tokens = clip.tokenize(text, context_length=self.max_length).to(device)
-        z = self.model.encode_text(tokens)
-        if self.normalize:
-            z = z / z.norm(dim=-1, keepdim=True)
-        # 임베딩 차원이 2D일 경우, max_length를 기준으로 차원 확장
-        if z.ndim == 2:
-            z = z.unsqueeze(1).repeat(1, self.max_length, 1)
+        self.device = device
+        self.max_length = max_length
+        if freeze:
+            self.freeze()
+        self.layer = layer
+        if self.layer == "last":
+            self.layer_idx = 0
+        elif self.layer == "penultimate":
+            self.layer_idx = 1
+        else:
+            raise NotImplementedError()
+
+    def freeze(self):
+        self.model = self.model.eval()
+        for param in self.parameters():
+            param.requires_grad = False
+
+    def forward(self, text):
+        self.device = self.model.positional_embedding.device
+        tokens = open_clip.tokenize(text)
+        z = self.encode_with_transformer(tokens.to(self.device))
         return z
 
-    
-# # 원본
-# class Mapping_Model(nn.Module):
-#     def __init__(self, max_length=77):
-#         super().__init__()
-#         self.max_length = max_length # default: max_length-1
-#         self.linear1 = torch.nn.Linear(1024, self.max_length//7*1024)
-#         self.linear2 = torch.nn.Linear(self.max_length//7*1024,self.max_length*1024)
-#         self.act = torch.nn.GELU()
-#         self.drop = torch.nn.Dropout(0.2)
-        
-#     def forward(self, x):
-#         return self.act(self.drop(self.linear2(self.act(self.drop(self.linear1(x)))))).reshape(x.shape[0],self.max_length,1024) # default: 768
+    def encode_with_transformer(self, text):
+        x = self.model.token_embedding(text)  # [batch_size, n_ctx, d_model]
+        x = x + self.model.positional_embedding
+        x = x.permute(1, 0, 2)  # NLD -> LND
+        x = self.text_transformer_forward(x, attn_mask=self.model.attn_mask)
+        x = x.permute(1, 0, 2)  # LND -> NLD
+        x = self.model.ln_final(x)
+        return x
+
+    def text_transformer_forward(self, x: torch.Tensor, attn_mask=None):
+        for i, r in enumerate(self.model.transformer.resblocks):
+            if i == len(self.model.transformer.resblocks) - self.layer_idx:
+                break
+            if self.model.transformer.grad_checkpointing and not torch.jit.is_scripting():
+                x = checkpoint(r, x, attn_mask)
+            else:
+                x = r(x, attn_mask=attn_mask)
+        return x
+
+    def encode(self, text):
+        return self(text)
+
+
 
 class Mapping_Model(nn.Module):
     def __init__(self, sequence_length=77, input_dim=1024, output_dim=1024):
